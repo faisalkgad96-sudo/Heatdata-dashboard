@@ -8,7 +8,7 @@ from io import BytesIO
 # PAGE SETUP
 # ==========================
 st.set_page_config(page_title="Neighbourhood Operations Dashboard", layout="wide")
-st.title("📊 Neighbourhood Operations Dashboard — Corrected Active Scooter Logic")
+st.title("📊 Neighbourhood HeatData Dashboard")
 st.markdown("""
 Upload your Excel/CSV snapshot file (every 10 minutes).  
 This version fixes per-neighborhood averages, removes 'No Neighborhood', adds rides (sum), and includes full advanced insights.
