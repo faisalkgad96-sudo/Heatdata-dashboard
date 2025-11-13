@@ -8,13 +8,11 @@ from io import BytesIO
 # PAGE SETUP
 # ==========================
 st.set_page_config(page_title="Neighbourhood Operations Dashboard", layout="wide")
-
 st.title("📊 Neighbourhood Operations Dashboard — Corrected Active Scooter Logic")
 st.markdown("""
 Upload your Excel/CSV snapshot file (every 10 minutes).  
-This version includes advanced insights, correct active averages, and hourly trends with toggles.
+This version fixes per-neighborhood averages, removes 'No Neighborhood', and correctly calculates ratios.
 """)
-
 
 # ==========================
 # FILE UPLOAD
@@ -35,7 +33,7 @@ if uploaded is not None:
     col_neigh = "Neighborhood"
     col_start = "Start Date - Local"
     col_sessions = "Sessions"
-    col_rides = "Rides"          # <-- YOU CONFIRMED THIS
+    col_rides = "Rides"
     col_active = "Active Vehicles"
     col_urgent = "Urgent Vehicles"
 
@@ -45,9 +43,9 @@ if uploaded is not None:
     df["_hour"] = df["_local_time"].dt.hour
     df["_date"] = df["_local_time"].dt.date
 
-    # ==========================
+    # ================
     # FILTERS
-    # ==========================
+    # ================
     area_list = sorted(df[col_area].dropna().unique())
     selected_area = st.sidebar.selectbox("🏙️ Choose Area", area_list, index=0)
     date_range = st.sidebar.date_input("📅 Select Date Range", [df["_date"].min(), df["_date"].max()])
@@ -59,11 +57,11 @@ if uploaded is not None:
         & (df[col_neigh].str.lower() != "no neighborhood")
     ].copy()
 
-    # ==========================
-    # NEIGHBORHOOD BREAKDOWN
-    # ==========================
-    st.markdown(f"### 📍 Neighborhood Breakdown — **{selected_area}**")
+    st.markdown(f"### 📍 Neighborhood Breakdown — {selected_area}")
 
+    # ==========================
+    # PER-NEIGHBORHOOD SUMMARY
+    # ==========================
     neighborhood_summary = []
     for n in df_filtered[col_neigh].dropna().unique():
         sub = df_filtered[df_filtered[col_neigh] == n]
@@ -76,9 +74,7 @@ if uploaded is not None:
         neighborhood_summary.append([n, total_rides, total_sessions, round(avg_active, 2), round(ratio, 2)])
 
     agg = pd.DataFrame(neighborhood_summary, columns=["Neighborhood", "Rides", "Sessions", "Active (avg)", "Ratio"])
-
-    st.dataframe(agg, use_container_width=True)   # WIDTH FIX
-
+    st.dataframe(agg, use_container_width=True)
 
     # ==========================
     # HOURLY HEATMAP (Sessions)
@@ -89,7 +85,6 @@ if uploaded is not None:
         df_filtered.groupby([col_neigh, "_hour"])
         .agg({
             col_sessions: "sum",
-            col_rides: "sum",     # Added rides sum (required later)
             col_active: "sum",
             col_urgent: "sum"
         })
@@ -112,56 +107,43 @@ if uploaded is not None:
         y=alt.Y(f"{col_neigh}:O", title="Neighborhood"),
         color=alt.Color(f"{col_sessions}:Q", title="Total Sessions", scale=alt.Scale(scheme="orangered")),
         tooltip=[col_neigh, "_hour", col_sessions, "Active (avg)", "Urgent (avg)"]
-    ).properties(width="container", height=400)
+    ).properties(width=1000, height=400)
 
-    st.altair_chart(heatmap, use_container_width=True)  # WIDTH FIX
-
+    st.altair_chart(heatmap, use_container_width=True)
 
     # ==========================
-    # ADVANCED INSIGHTS — HOURLY TRENDS (SUM rides)
+    # HOURLY ACTIVE + URGENT + RIDES TREND
     # ==========================
     st.markdown("### 📈 Hourly Active, Urgent & Rides Trend")
-    st.write("Use the toggles below to show or hide metrics.")
 
-    hourly_summary = (
-        df_filtered.groupby("_hour")
-        .agg({
-            col_rides: "sum",       # <-- SUM OF RIDES (requested)
-            col_active: "sum",
-            col_urgent: "sum"
-        })
-        .reset_index()
-    )
+    hourly_summary = df_filtered.groupby("_hour").agg({
+        col_active: "sum",
+        col_urgent: "sum"
+    }).reset_index()
 
     hourly_summary["Snapshots"] = df_filtered.groupby("_hour")["_local_time"].nunique().values
     hourly_summary["Active (avg)"] = (hourly_summary[col_active] / hourly_summary["Snapshots"]).round(2)
     hourly_summary["Urgent (avg)"] = (hourly_summary[col_urgent] / hourly_summary["Snapshots"]).round(2)
 
-    # Toggles
-    show_rides = st.checkbox("Show Rides (sum)", value=True)
-    show_active = st.checkbox("Show Active (avg)", value=True)
-    show_urgent = st.checkbox("Show Urgent (avg)", value=True)
+    # ✅ NEW: Add total Rides (sum)
+    hourly_summary["Rides (sum)"] = df_filtered.groupby("_hour")[col_rides].sum().values
 
-    trend_data = pd.DataFrame({"_hour": hourly_summary["_hour"]})
-
-    if show_rides:
-        trend_data["Rides (sum)"] = hourly_summary[col_rides]
-    if show_active:
-        trend_data["Active (avg)"] = hourly_summary["Active (avg)"]
-    if show_urgent:
-        trend_data["Urgent (avg)"] = hourly_summary["Urgent (avg)"]
-
-    melted = trend_data.melt(id_vars="_hour", var_name="Metric", value_name="Value")
+    # Melt for chart
+    melted = hourly_summary.melt(
+        id_vars="_hour",
+        value_vars=["Active (avg)", "Urgent (avg)", "Rides (sum)"],
+        var_name="Metric",
+        value_name="Value"
+    )
 
     trend_chart = alt.Chart(melted).mark_line(point=True).encode(
         x=alt.X("_hour:O", title="Hour of Day"),
-        y=alt.Y("Value:Q", title="Value"),
-        color=alt.Color("Metric:N"),
+        y=alt.Y("Value:Q", title="Count"),
+        color=alt.Color("Metric:N", title="Metric", scale=alt.Scale(scheme="category10")),
         tooltip=["_hour", "Metric", "Value"]
-    ).properties(width="container", height=400)
+    ).properties(width=1000, height=400)
 
     st.altair_chart(trend_chart, use_container_width=True)
-
 
     # ==========================
     # EXPORT TO EXCEL
@@ -179,8 +161,74 @@ if uploaded is not None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+    # ==========================
+    # ADVANCED INSIGHTS (unchanged)
+    # ==========================
+    st.markdown("---")
+    st.markdown("## 🧠 Advanced Insights & Optimization Tools")
+
+    # 1️⃣ UTILIZATION HEATMAP
+    st.markdown("### 🔥 Hourly Utilization Heatmap")
+
+    hourly["Utilization"] = (hourly[col_rides] / hourly["Active (avg)"]).replace([np.nan, np.inf], 0)
+    util_heatmap = alt.Chart(hourly).mark_rect().encode(
+        x=alt.X("_hour:O", title="Hour of Day"),
+        y=alt.Y(f"{col_neigh}:O", title="Neighborhood"),
+        color=alt.Color("Utilization:Q", title="Rides per Active Scooter", scale=alt.Scale(scheme="tealblues")),
+        tooltip=[col_neigh, "_hour", "Utilization", "Active (avg)", col_rides]
+    ).properties(width=1000, height=400)
+    st.altair_chart(util_heatmap, use_container_width=True)
+
+    # 3️⃣ TOP/BOTTOM NEIGHBORHOODS
+    st.markdown("### 🏆 Top & Bottom Performing Neighborhoods")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Top 3 Neighborhoods (by Ratio)")
+        st.table(agg.sort_values("Ratio", ascending=False).head(3))
+    with col2:
+        st.subheader("Bottom 3 Neighborhoods (by Ratio)")
+        st.table(agg.sort_values("Ratio", ascending=True).head(3))
+
+    # 4️⃣ HOURLY DEMAND FORECAST
+    st.markdown("### 📈 Hourly Demand Forecast")
+    hourly_demand = (
+        df_filtered.groupby("_hour")[col_rides]
+        .sum()
+        .reset_index()
+        .sort_values("_hour")
+    )
+    hourly_demand["Forecast"] = hourly_demand[col_rides].rolling(window=3, min_periods=1).mean()
+
+    base = alt.Chart(hourly_demand).mark_line(point=True, color="#00b4d8").encode(
+        x=alt.X("_hour:O", title="Hour of Day"),
+        y=alt.Y(f"{col_rides}:Q", title="Total Rides"),
+        tooltip=["_hour", col_rides]
+    )
+    forecast = alt.Chart(hourly_demand).mark_line(point=True, strokeDash=[5,5], color="orange").encode(
+        x="_hour:O", y="Forecast:Q", tooltip=["_hour", "Forecast"]
+    )
+    st.altair_chart(base + forecast, use_container_width=True)
+
+    # 9️⃣ FLEET SIMULATION
+    st.markdown("### ⚙️ Fleet Optimization Simulation")
+
+    fleet_multiplier = st.slider("Adjust Fleet Size (%)", 50, 200, 100, 10)
+    agg["Adjusted Active (avg)"] = agg["Active (avg)"] * (fleet_multiplier / 100)
+    agg["Projected Rides"] = (agg["Ratio"] * agg["Adjusted Active (avg)"]).round(2)
+    agg["Projected Ratio"] = (agg["Projected Rides"] / agg["Adjusted Active (avg)"]).replace([np.nan, np.inf], 0).round(2)
+
+    st.markdown(f"#### 📊 Projected Performance if Fleet Size = {fleet_multiplier}% of Current")
+    st.dataframe(
+        agg[["Neighborhood", "Active (avg)", "Adjusted Active (avg)", "Rides", "Projected Rides", "Projected Ratio"]],
+        use_container_width=True
+    )
+
+    total_rides_proj = agg["Projected Rides"].sum()
+    st.success(f"✅ Total projected rides across all neighborhoods: **{int(total_rides_proj):,}**")
+
 else:
     st.info("👆 Upload a data file to begin.")
+
 
 
 
